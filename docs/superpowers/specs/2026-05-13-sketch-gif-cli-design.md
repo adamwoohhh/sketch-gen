@@ -47,6 +47,18 @@ The first version uses deterministic top-to-bottom reveal ordering. This is simp
 - `pyproject.toml`: project metadata and dependencies.
 - `README.md`: installation and usage.
 
+## Code Readability
+
+The user does not have a Python development background, so the implementation should include clear comments around important steps. Comments should explain why each major step exists, especially:
+
+- Image loading and OpenCV color channel handling.
+- Grayscale conversion, Gaussian blur, and Canny edge detection.
+- How the line reveal frames are generated.
+- How color-fill frames blend the sketch with the original image.
+- CLI validation and JSON output for future NodeJS integration.
+
+Comments should be educational but still tied to the code. Avoid comments that only restate a variable name or a single obvious assignment.
+
 ## NodeJS Compatibility
 
 The Python CLI is the stable integration contract. A future npm package can:
