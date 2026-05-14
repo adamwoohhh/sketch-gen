@@ -139,22 +139,27 @@ def _build_line_reveal_frames(edges: np.ndarray, frame_count: int) -> list[Image
 
     return frames
 
-
+# 边缘像素点排序，连续的笔划优先绘制，分叉时按固定顺序走，保证动画稳定可复现。
 def _order_edge_pixels(edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    # Canny 只告诉我们哪些像素是边缘，不知道真实的绘制顺序。这里先把互相
-    # 连接的边缘像素分成一组组“笔划”，避免以前按行扫描时多条线交错出现。
+    # Canny 生成的线稿变成 0/1 二值图，方便后续连通组件分析。边缘像素是 255，非边缘像素是 0。
     edge_mask = (edges > 0).astype(np.uint8)
+    # 计算图片的连接组件
     component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
         edge_mask,
+        # 寻找周围 8 个相邻的像素
         connectivity=8,
     )
 
     ordered_points: list[tuple[int, int]] = []
+    # 组件 0 是背景，所以这里从 1 开始，提取出所有的边
     component_ids = range(1, component_count)
 
-    # 组件 0 是背景。真实笔划按包围盒左上角排序，保证每次运行结果稳定。
+    # 计算边的顺序
+    # 按照组件的上边界坐标和左边界坐标排序。这样动画会先画上边靠上的笔划，再画下边的；同一水平线上的笔划会先画左边的，再画右边的。
     sorted_component_ids = sorted(
         component_ids,
+        # lamda 用于定义临时函数
+        # 这里通过临时函数返回了一个元组，元组的第一个元素是组件的上边界坐标，第二个元素是组件的左边界坐标。
         key=lambda label: (
             stats[label, cv2.CC_STAT_TOP],
             stats[label, cv2.CC_STAT_LEFT],
@@ -164,6 +169,7 @@ def _order_edge_pixels(edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     for label in sorted_component_ids:
         component_rows, component_cols = np.where(labels == label)
         component_points = set(zip(component_rows.tolist(), component_cols.tolist()))
+        # 计算边内部的像素点顺序
         ordered_points.extend(_walk_connected_stroke(component_points))
 
     if not ordered_points:
@@ -174,12 +180,15 @@ def _order_edge_pixels(edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.array(rows, dtype=np.int64), np.array(cols, dtype=np.int64)
 
 
+# 计算边内部的像素点顺序
 def _walk_connected_stroke(
     component_points: set[tuple[int, int]],
 ) -> list[tuple[int, int]]:
     remaining = set(component_points)
     ordered: list[tuple[int, int]] = []
 
+    # 不断从剩余的像素点中选择一个起始点，优先选择端点（只有一个或没有相邻点的像素）。
+    # 将起始点加入有序列表并从剩余集合中移除，然后寻找相邻像素点，优先选择行坐标较小的；行坐标相同再选择列坐标较小的。重复这个过程，直到没有剩余像素点。
     while remaining:
         current = _choose_stroke_start(remaining)
 
@@ -202,16 +211,21 @@ def _walk_connected_stroke(
     return ordered
 
 
+# 找出笔划的起始点。
+# 通常是端点（只有一个或没有相邻点的像素），如果没有端点（比如一个闭环），就从任意像素开始。多个候选时，选择行坐标较小的；行坐标相同再选择列坐标较小的。
 def _choose_stroke_start(points: set[tuple[int, int]]) -> tuple[int, int]:
+    # 找出所有端点（相邻像素不超过 1 个的像素）
     endpoints = [
         point
         for point in points
         if _remaining_neighbor_count(point, points) <= 1
     ]
+    # 如果没有端点（比如一个闭环），就从任意像素开始。多个候选时，选择行坐标较小的；行坐标相同再选择列坐标较小的。
     candidates = endpoints or list(points)
     return min(candidates, key=lambda point: (point[0], point[1]))
 
 
+# 计算 point 的 8 个相邻点中还有多少个在 points 里。这个函数用来判断一个像素点是笔划的末端（只有一个或没有相邻点）还是中间（有两个或更多相邻点）。
 def _remaining_neighbor_count(
     point: tuple[int, int],
     points: set[tuple[int, int]],
@@ -219,6 +233,7 @@ def _remaining_neighbor_count(
     return sum(neighbor in points for neighbor in _neighbor_points(point))
 
 
+# 给定的点的八个邻居坐标，从左上角开始顺时针方向排列。
 def _neighbor_points(point: tuple[int, int]) -> list[tuple[int, int]]:
     row, col = point
     return [
@@ -239,22 +254,181 @@ def _build_color_fill_frames(
     frame_count: int,
 ) -> list[Image.Image]:
     frames: list[Image.Image] = []
-    # 找出所有线条所在的像素（小雨250视为线条，255为纯白）
+    current_frame = sketch_rgb.copy()
+    # 找出所有线条所在的像素（小于250视为线条，255为纯白）
     line_mask = np.any(sketch_rgb < 250, axis=2)
 
-    # 按照既定帧数，将原色拆分成多个帧，一次填充上去（效果就是整个画面颜色逐渐从白色变为原色）
-    for index in range(frame_count):
-        # Blend moves from the completed black-line sketch to the original color.
-        # A low alpha keeps the canvas mostly white; alpha=1 is the full source.
-        alpha = (index + 1) / frame_count
-        blended = (
-            sketch_rgb.astype(np.float32) * (1 - alpha)
-            + source_rgb.astype(np.float32) * alpha
-        ).astype(np.uint8)
+    # 根据原图+线稿，计算出所有的色块
+    fill_chunks = _build_color_fill_chunks(source_rgb, line_mask, frame_count)
 
-        # Re-apply dark line pixels so the final color image still has visible
-        # sketch outlines instead of becoming just the original picture.
-        blended[line_mask] = (25, 25, 25)
-        frames.append(Image.fromarray(blended, mode="RGB"))
+    # 颜色填充不再整张图一起淡入，而是每一帧只涂一个连续像素块。这样看起来
+    # 更像画笔一笔一笔把色块补上；背景区域会被排在最后填充。
+    for chunk_mask in fill_chunks:
+        if np.any(chunk_mask):
+            current_frame[chunk_mask] = source_rgb[chunk_mask]
+
+        # 线稿像素始终压在颜色之上，避免填色时把线条盖掉。
+        frame = current_frame.copy()
+        frame[line_mask] = (25, 25, 25)
+        frames.append(Image.fromarray(frame, mode="RGB"))
+
+    while len(frames) < frame_count:
+        frames.append(frames[-1].copy())
 
     return frames
+
+
+def _build_color_fill_chunks(
+    source_rgb: np.ndarray,
+    line_mask: np.ndarray,
+    frame_count: int,
+) -> list[np.ndarray]:
+    regions = _find_color_regions(source_rgb, line_mask)
+    if not regions:
+        empty_mask = np.zeros_like(line_mask, dtype=bool)
+        return [empty_mask.copy() for _ in range(frame_count)]
+
+    # 先保证每个色块至少有机会单独出现；如果帧数更多，再把大色块拆成多笔。
+    chunks: list[np.ndarray] = []
+    extra_frames = max(0, frame_count - len(regions))
+    region_sizes = [int(np.count_nonzero(region)) for region, _is_background in regions]
+    total_pixels = sum(region_sizes)
+
+    for index, (region, _is_background) in enumerate(regions):
+        extra_for_region = 0
+        if total_pixels > 0 and extra_frames > 0:
+            if index == len(regions) - 1:
+                extra_for_region = extra_frames
+            else:
+                extra_for_region = round(
+                    extra_frames * np.count_nonzero(region) / total_pixels
+                )
+                extra_for_region = min(extra_for_region, extra_frames)
+            extra_frames -= extra_for_region
+
+        split_count = 1 + extra_for_region
+        chunks.extend(_split_region_mask(region, split_count))
+
+    if len(chunks) <= frame_count:
+        return chunks
+
+    # 如果图片被切出了很多细碎色块，但用户给的 GIF 帧数有限，最后一帧需要
+    # 兜底补完剩余像素，保证动画结束时图片完整。通常建议增加 --frames 让
+    # 每个色块都能获得更细腻的一笔。
+    compacted_chunks = chunks[: frame_count - 1]
+    remaining_mask = np.zeros_like(line_mask, dtype=bool)
+    for chunk in chunks[frame_count - 1 :]:
+        remaining_mask |= chunk
+    compacted_chunks.append(remaining_mask)
+    return compacted_chunks
+
+
+def _find_color_regions(
+    source_rgb: np.ndarray,
+    line_mask: np.ndarray,
+) -> list[tuple[np.ndarray, bool]]:
+    height, width = line_mask.shape
+    # 对线稿的像素点取反，即所有非线条的像素点都被视为可填色区域。
+    paintable_mask = ~line_mask
+    # 真实图片里同一色块会有轻微噪声，所以先把颜色按 64 级量化。相近颜色会
+    # 被归为同一组，再按连通组件切分，得到“同色且连续”的填色区域。
+    quantized = source_rgb // 64
+
+    regions: list[tuple[np.ndarray, bool, tuple[int, int], int]] = []
+    # 只对出现最多的颜色桶做精细连通分块。真实照片可能有大量细小颜色变化，
+    # 如果每个颜色桶都跑一次连通组件会很慢；主色块负责呈现涂抹过程，剩余
+    # 像素会在最后的兜底区域补完。
+    paintable_colors = quantized[paintable_mask]
+    unique_colors, counts = np.unique(paintable_colors, axis=0, return_counts=True)
+    max_color_buckets = 16
+    top_indexes = np.argsort(counts)[-max_color_buckets:]
+    seen_keys = [
+        tuple(color.tolist())
+        for color in unique_colors[top_indexes]
+    ]
+    processed_mask = np.zeros_like(paintable_mask, dtype=bool)
+
+    for color_key in seen_keys:
+        color_mask = np.all(quantized == color_key, axis=2) & paintable_mask
+        processed_mask |= color_mask
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            color_mask.astype(np.uint8),
+            connectivity=8,
+        )
+
+        for label in range(1, component_count):
+            rows, cols = np.where(labels == label)
+            if len(rows) == 0:
+                continue
+
+            is_background = _touches_image_border(rows, cols, height, width)
+            # 色块本身已经由 OpenCV 保证是连通区域。这里用布尔 mask 表示整块，
+            # 后续可以用 NumPy 一次性赋值，避免把百万像素转成 Python tuple。
+            region_mask = labels == label
+            top_left = (
+                stats[label, cv2.CC_STAT_TOP],
+                stats[label, cv2.CC_STAT_LEFT],
+            )
+            area = stats[label, cv2.CC_STAT_AREA]
+            regions.append((region_mask, is_background, top_left, area))
+
+    remaining_mask = paintable_mask & ~processed_mask
+    if np.any(remaining_mask):
+        regions.append(
+            (
+                remaining_mask,
+                True,
+                (0, 0),
+                int(np.count_nonzero(remaining_mask)),
+            )
+        )
+
+    # 非背景色块先填，接触图片边缘的背景区域最后填。面积大的区域排后一点，
+    # 小的主体色块会先一笔笔出现。
+    sorted_regions = sorted(
+        regions,
+        key=lambda item: (item[1], item[3], item[2][0], item[2][1]),
+    )
+    return [
+        (points, is_background)
+        for points, is_background, _top_left, _area in sorted_regions
+    ]
+
+
+def _touches_image_border(
+    rows: np.ndarray,
+    cols: np.ndarray,
+    height: int,
+    width: int,
+) -> bool:
+    return bool(
+        np.any(rows == 0)
+        or np.any(cols == 0)
+        or np.any(rows == height - 1)
+        or np.any(cols == width - 1)
+    )
+
+
+def _split_region_mask(
+    region_mask: np.ndarray,
+    split_count: int,
+) -> list[np.ndarray]:
+    if split_count <= 1 or np.count_nonzero(region_mask) <= 1:
+        return [region_mask]
+
+    rows, cols = np.where(region_mask)
+    order = np.lexsort((cols, rows))
+    rows = rows[order]
+    cols = cols[order]
+
+    chunks: list[np.ndarray] = []
+    for row_chunk, col_chunk in zip(
+        np.array_split(rows, split_count),
+        np.array_split(cols, split_count),
+    ):
+        if len(row_chunk) == 0:
+            continue
+        chunk_mask = np.zeros_like(region_mask, dtype=bool)
+        chunk_mask[row_chunk, col_chunk] = True
+        chunks.append(chunk_mask)
+    return chunks

@@ -4,7 +4,12 @@ import cv2
 import numpy as np
 from PIL import Image, ImageSequence
 
-from sketch_gen.renderer import RenderOptions, _order_edge_pixels, render_sketch_gif
+from sketch_gen.renderer import (
+    RenderOptions,
+    _build_color_fill_frames,
+    _order_edge_pixels,
+    render_sketch_gif,
+)
 
 
 def _write_synthetic_image(path: Path) -> None:
@@ -53,3 +58,35 @@ def test_order_edge_pixels_keeps_connected_strokes_together():
     assert first_stroke_points in (left_stroke, right_stroke)
     assert second_stroke_points in (left_stroke, right_stroke)
     assert first_stroke_points != second_stroke_points
+
+
+def test_color_fill_frames_paint_connected_color_regions_before_background():
+    source_rgb = np.full((6, 8, 3), (240, 220, 120), dtype=np.uint8)
+    source_rgb[1:3, 1:3] = (220, 40, 40)
+    source_rgb[3:5, 5:7] = (40, 80, 220)
+    sketch_rgb = np.full((6, 8, 3), 255, dtype=np.uint8)
+
+    frames = _build_color_fill_frames(source_rgb, sketch_rgb, frame_count=3)
+    frame_arrays = [np.array(frame, dtype=np.uint8) for frame in frames]
+    changed_masks = [
+        np.any(frame != sketch_rgb, axis=2)
+        for frame in frame_arrays
+    ]
+
+    red_mask = np.zeros((6, 8), dtype=bool)
+    red_mask[1:3, 1:3] = True
+    blue_mask = np.zeros((6, 8), dtype=bool)
+    blue_mask[3:5, 5:7] = True
+    background_mask = ~(red_mask | blue_mask)
+
+    first_new_pixels = changed_masks[0]
+    second_new_pixels = changed_masks[1] & ~changed_masks[0]
+    third_new_pixels = changed_masks[2] & ~changed_masks[1]
+
+    assert first_new_pixels.sum() == 4
+    assert second_new_pixels.sum() == 4
+    assert first_new_pixels.tolist() in (red_mask.tolist(), blue_mask.tolist())
+    assert second_new_pixels.tolist() in (red_mask.tolist(), blue_mask.tolist())
+    assert not np.any(changed_masks[1] & background_mask)
+    assert third_new_pixels.sum() == background_mask.sum()
+    assert np.array_equal(frame_arrays[-1], source_rgb)
