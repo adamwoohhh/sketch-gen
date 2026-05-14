@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.35,
         help="Fraction of frames used for color fill.",
     )
+    parser.add_argument(
+        "--log",
+        action="store_true",
+        help="Write a process log file under ./logs.",
+    )
     return parser
 
 
@@ -70,8 +76,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
+        log_path = setup_logging(args.log)
+        logging.info("render start input=%s output_dir=%s", args.input_path, args.output_dir)
         output_path = build_output_path(args.input_path, args.output_dir)
         result = render_sketch_gif(args.input_path, output_path, options)
+        logging.info("render complete output=%s frames=%s", result.output_path, result.frames)
     except ValueError as error:
         # Keep failures easy for NodeJS to consume: stdout stays empty, stderr
         # receives a human-readable message, and the exit code is non-zero.
@@ -80,18 +89,38 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # stdout is intentionally only JSON. A future npm wrapper can parse this
     # directly without filtering progress bars or debug logs.
-    print(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "frames": result.frames,
-                "width": result.width,
-                "height": result.height,
-            },
-            ensure_ascii=True,
-        )
-    )
+    payload = {
+        "output_path": str(result.output_path),
+        "frames": result.frames,
+        "width": result.width,
+        "height": result.height,
+    }
+    if log_path is not None:
+        payload["log_path"] = str(log_path)
+
+    print(json.dumps(payload, ensure_ascii=True))
     return 0
+
+
+def setup_logging(enabled: bool) -> Path | None:
+    if not enabled:
+        logging.disable(logging.CRITICAL)
+        return None
+
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    log_path = log_dir / f"sketch-gen-{timestamp}.log"
+
+    # 日志只写文件，不写 stdout/stderr。这样 NodeJS 调用时 stdout 仍然是纯 JSON，
+    # 不会因为调试文本混入而导致 JSON.parse 失败。
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
+    )
+    return log_path
 
 
 def build_output_path(input_path: Path, output_dir: Path | None) -> Path:

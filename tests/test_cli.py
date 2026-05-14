@@ -96,3 +96,32 @@ def test_cli_rejects_even_blur_kernel(tmp_path):
     assert completed.returncode != 0
     assert completed.stdout == ""
     assert "--blur-kernel must be a positive odd integer" in completed.stderr
+
+
+def test_cli_writes_log_file_when_log_enabled(tmp_path):
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "generated"
+    _write_synthetic_image(input_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sketch_gen",
+            str(input_path),
+            str(output_dir),
+            "--frames",
+            "6",
+            "--log",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    log_path = Path(payload["log_path"])
+    assert log_path.parent == Path("logs")
+    assert log_path.exists()
+    assert "render complete" in log_path.read_text()

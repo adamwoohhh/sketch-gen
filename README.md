@@ -27,8 +27,12 @@ Useful options:
   --blur-kernel 5 \
   --canny-low 80 \
   --canny-high 160 \
-  --color-frames-ratio 0.35
+  --color-frames-ratio 0.35 \
+  --log
 ```
+
+`--log` writes a log file under `./logs`. stdout remains JSON-only, so NodeJS
+callers can still parse the command result directly.
 
 Run tests:
 
