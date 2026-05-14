@@ -22,6 +22,9 @@ dev = [
 [project.scripts]
 sketch-gen = "sketch_gen.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["sketch_gen*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
