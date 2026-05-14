@@ -4,8 +4,24 @@
 
 ## Install
 
+For local development:
+
 ```bash
 make setup
+```
+
+From a Git repository in another Python project:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install "git+https://github.com/your-org/sketch-gen.git"
+```
+
+For a private repository, use the SSH URL that your deployment environment can
+access:
+
+```bash
+.venv/bin/python -m pip install "git+ssh://git@github.com/your-org/sketch-gen.git"
 ```
 
 ## Usage
@@ -37,6 +53,33 @@ uses infinite looping.
 
 `--log` writes a log file under `./logs`. stdout remains JSON-only, so NodeJS
 callers can still parse the command result directly.
+
+## Python API
+
+Other Python projects can import the renderer directly after installing the
+package from Git:
+
+```python
+from sketch_gen import RenderOptions, render_sketch_gif
+
+result = render_sketch_gif(
+    "input.png",
+    "output/input.gif",
+    RenderOptions(
+        frames=24,
+        duration=80,
+        loop=1,
+    ),
+)
+
+print(result.output_path)
+```
+
+The installed package also exposes a command-line script:
+
+```bash
+sketch-gen input.png output --loop-once
+```
 
 Run tests:
 
