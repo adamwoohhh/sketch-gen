@@ -8,7 +8,7 @@ from typing import Sequence
 
 from .renderer import RenderOptions, render_sketch_gif
 
-
+# 解析命令行参数
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sketch-gen",

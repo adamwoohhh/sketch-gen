@@ -52,6 +52,7 @@ def render_sketch_gif(
     input_path = Path(input_path)
     output_path = Path(output_path)
 
+    # 检查输出文件必须是.gif格式
     if output_path.suffix.lower() != ".gif":
         raise ValueError("output path must end with .gif")
 

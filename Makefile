@@ -1,6 +1,6 @@
 PYTHON := .venv/bin/python
-INPUT ?= input.png
-OUTPUT ?= output.gif
+INPUT ?= asserts/c.png
+OUTPUT ?= output/c.gif
 
 .PHONY: setup test run clean
 
