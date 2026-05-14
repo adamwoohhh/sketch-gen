@@ -27,7 +27,7 @@ Useful options:
   --blur-kernel 5 \
   --canny-low 80 \
   --canny-high 160 \
-  --color-frames-ratio 0.35 \
+  --color-frames-ratio 0.65 \
   --log
 ```
 

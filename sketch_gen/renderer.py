@@ -15,7 +15,7 @@ class RenderOptions:
     blur_kernel: int = 5
     canny_low: int = 80
     canny_high: int = 160
-    color_frames_ratio: float = 0.35
+    color_frames_ratio: float = 0.65
 
 
 @dataclass(frozen=True)
@@ -310,17 +310,70 @@ def _build_color_fill_chunks(
         chunks.extend(_split_region_mask(region, split_count))
 
     if len(chunks) <= frame_count:
+        return _ensure_chunk_count(chunks, frame_count)
+
+    return _ensure_chunk_count(_pack_chunks_evenly(chunks, frame_count), frame_count)
+
+
+def _ensure_chunk_count(
+    chunks: list[np.ndarray],
+    frame_count: int,
+) -> list[np.ndarray]:
+    chunks = [chunk for chunk in chunks if np.any(chunk)]
+    if not chunks:
         return chunks
 
-    # 如果图片被切出了很多细碎色块，但用户给的 GIF 帧数有限，最后一帧需要
-    # 兜底补完剩余像素，保证动画结束时图片完整。通常建议增加 --frames 让
-    # 每个色块都能获得更细腻的一笔。
-    compacted_chunks = chunks[: frame_count - 1]
-    remaining_mask = np.zeros_like(line_mask, dtype=bool)
-    for chunk in chunks[frame_count - 1 :]:
-        remaining_mask |= chunk
-    compacted_chunks.append(remaining_mask)
-    return compacted_chunks
+    while len(chunks) < frame_count:
+        largest_index = max(
+            range(len(chunks)),
+            key=lambda index: int(np.count_nonzero(chunks[index])),
+        )
+        largest = chunks[largest_index]
+        if int(np.count_nonzero(largest)) <= 1:
+            break
+        first_half, second_half = _split_region_mask(largest, 2)
+        chunks[largest_index : largest_index + 1] = [first_half, second_half]
+
+    return chunks
+
+
+def _pack_chunks_evenly(
+    chunks: list[np.ndarray],
+    frame_count: int,
+) -> list[np.ndarray]:
+    total_pixels = sum(int(np.count_nonzero(chunk)) for chunk in chunks)
+    if total_pixels == 0:
+        return chunks[:frame_count]
+
+    packed_chunks: list[np.ndarray] = []
+    current_mask = np.zeros_like(chunks[0], dtype=bool)
+    current_pixels = 0
+    target_pixels = max(1, round(total_pixels / frame_count))
+
+    for chunk in chunks:
+        chunk_pixels = int(np.count_nonzero(chunk))
+        if (
+            len(packed_chunks) < frame_count - 1
+            and current_pixels > 0
+            and current_pixels + chunk_pixels > target_pixels
+        ):
+            packed_chunks.append(current_mask)
+            current_mask = np.zeros_like(chunk, dtype=bool)
+            current_pixels = 0
+
+        current_mask |= chunk
+        current_pixels += chunk_pixels
+
+    if current_pixels > 0:
+        packed_chunks.append(current_mask)
+
+    if len(packed_chunks) > frame_count:
+        tail_mask = np.zeros_like(chunks[0], dtype=bool)
+        for chunk in packed_chunks[frame_count - 1 :]:
+            tail_mask |= chunk
+        packed_chunks = packed_chunks[: frame_count - 1] + [tail_mask]
+
+    return packed_chunks
 
 
 def _find_color_regions(
@@ -339,13 +392,17 @@ def _find_color_regions(
     # 如果每个颜色桶都跑一次连通组件会很慢；主色块负责呈现涂抹过程，剩余
     # 像素会在最后的兜底区域补完。
     paintable_colors = quantized[paintable_mask]
+    # 从 paintable_colors 中找出所有颜色和每个颜色像素点数量
     unique_colors, counts = np.unique(paintable_colors, axis=0, return_counts=True)
     max_color_buckets = 16
+    # 按大到小取前 max_color_buckets 个颜色桶的索引
     top_indexes = np.argsort(counts)[-max_color_buckets:]
+    # 前 max_color_buckets 个颜色桶的颜色值列表
     seen_keys = [
         tuple(color.tolist())
         for color in unique_colors[top_indexes]
     ]
+    # 记录已经被主颜色桶覆盖的像素，剩下的零碎颜色后面合并处理。
     processed_mask = np.zeros_like(paintable_mask, dtype=bool)
 
     for color_key in seen_keys:

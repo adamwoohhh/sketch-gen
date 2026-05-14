@@ -6,6 +6,7 @@ from PIL import Image, ImageSequence
 
 from sketch_gen.renderer import (
     RenderOptions,
+    _build_color_fill_chunks,
     _build_color_fill_frames,
     _order_edge_pixels,
     render_sketch_gif,
@@ -13,7 +14,7 @@ from sketch_gen.renderer import (
 
 
 def _write_synthetic_image(path: Path) -> None:
-    image = np.full((32, 32, 3), 255, dtype=np.uint8)
+    image = np.full((32, 32, 3), 230, dtype=np.uint8)
     cv2.rectangle(image, (8, 8), (24, 24), (20, 120, 220), thickness=-1)
     cv2.line(image, (4, 28), (28, 4), (220, 40, 40), thickness=2)
     cv2.imwrite(str(path), image)
@@ -90,3 +91,19 @@ def test_color_fill_frames_paint_connected_color_regions_before_background():
     assert not np.any(changed_masks[1] & background_mask)
     assert third_new_pixels.sum() == background_mask.sum()
     assert np.array_equal(frame_arrays[-1], source_rgb)
+
+
+def test_color_fill_chunks_spread_many_regions_across_frames():
+    source_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    for row in range(4):
+        for col in range(4):
+            source_rgb[row, col] = (row * 64, col * 64, 128)
+    line_mask = np.zeros((4, 4), dtype=bool)
+
+    chunks = _build_color_fill_chunks(source_rgb, line_mask, frame_count=4)
+    chunk_sizes = [int(np.count_nonzero(chunk)) for chunk in chunks]
+
+    assert len(chunks) == 4
+    assert sum(chunk_sizes) == 16
+    assert max(chunk_sizes) <= 6
+    assert min(chunk_sizes) >= 2
