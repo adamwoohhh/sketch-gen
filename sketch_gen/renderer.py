@@ -61,18 +61,22 @@ def render_sketch_gif(
     source_bgr = cv2.imread(str(input_path), cv2.IMREAD_COLOR)
     if source_bgr is None:
         raise ValueError(f"input image could not be read: {input_path}")
+    # 将图片信息中的颜色转换为RGB格式
     source_rgb = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2RGB)
 
+    # 从图片信息中取出宽高数据
     height, width = source_rgb.shape[:2]
 
     # Canny works on a single brightness channel. Grayscale removes color while
     # preserving light/dark structure, which is what edge detection needs.
     gray = cv2.cvtColor(source_bgr, cv2.COLOR_BGR2GRAY)
 
+    # 高斯模糊
     # Gaussian blur softens tiny image noise before edge detection. Without this
     # step, Canny tends to produce many speckles that look unlike hand sketching.
     blurred = cv2.GaussianBlur(gray, (options.blur_kernel, options.blur_kernel), 0)
 
+    # 边缘检测
     # Canny returns a binary image: edge pixels are 255, non-edge pixels are 0.
     # The two thresholds control how strict edge detection is.
     edges = cv2.Canny(blurred, options.canny_low, options.canny_high)
@@ -100,11 +104,15 @@ def _build_animation_frames(
     edges: np.ndarray,
     options: RenderOptions,
 ) -> list[Image.Image]:
+    # frames 为 gif 总帧数，color_frames_ratio 比例的帧数用于颜色填充，剩余的帧数用于线条绘制
     color_frame_count = max(1, round(options.frames * options.color_frames_ratio))
     line_frame_count = max(1, options.frames - color_frame_count)
 
+    # 生成绘制线条的帧
     line_frames = _build_line_reveal_frames(edges, line_frame_count)
+    # 取线稿的最后一帧作为填色的起始帧
     final_sketch = np.array(line_frames[-1], dtype=np.uint8)
+    # 生成填色的帧
     color_frames = _build_color_fill_frames(source_rgb, final_sketch, color_frame_count)
 
     return line_frames + color_frames
@@ -112,15 +120,19 @@ def _build_animation_frames(
 
 def _build_line_reveal_frames(edges: np.ndarray, frame_count: int) -> list[Image.Image]:
     height, width = edges.shape
+    # 根据边缘图的宽高创建一个白色的画布
     canvas = np.full((height, width, 3), 255, dtype=np.uint8)
+    # 取出所有边缘像素的行列索引
     edge_rows, edge_cols = np.where(edges > 0)
 
+    # 按照从上到下、从左到右的顺序给所有像素点排序
     # Reveal edge pixels from top to bottom. This deterministic ordering is less
     # artistic than real stroke reconstruction, but it is stable and easy to test.
     order = np.lexsort((edge_cols, edge_rows))
     edge_rows = edge_rows[order]
     edge_cols = edge_cols[order]
 
+    # 按照既定的帧数，将像素点按顺序填充到每一帧
     frames: list[Image.Image] = []
     total_edges = len(edge_rows)
     for index in range(frame_count):
@@ -141,8 +153,10 @@ def _build_color_fill_frames(
     frame_count: int,
 ) -> list[Image.Image]:
     frames: list[Image.Image] = []
+    # 找出所有线条所在的像素（小雨250视为线条，255为纯白）
     line_mask = np.any(sketch_rgb < 250, axis=2)
 
+    # 按照既定帧数，将原色拆分成多个帧，一次填充上去（效果就是整个画面颜色逐渐从白色变为原色）
     for index in range(frame_count):
         # Blend moves from the completed black-line sketch to the original color.
         # A low alpha keeps the canvas mostly white; alpha=1 is the full source.
