@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write a process log file under ./logs.",
     )
+    parser.add_argument(
+        "--loop-once",
+        action="store_true",
+        help="Write GIF loop metadata for a single loop instead of infinite looping.",
+    )
     return parser
 
 
@@ -73,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         canny_low=args.canny_low,
         canny_high=args.canny_high,
         color_frames_ratio=args.color_frames_ratio,
+        loop=1 if args.loop_once else 0,
     )
 
     try:

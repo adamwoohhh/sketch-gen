@@ -16,6 +16,7 @@ class RenderOptions:
     canny_low: int = 80
     canny_high: int = 160
     color_frames_ratio: float = 0.65
+    loop: int = 0
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,8 @@ def validate_options(options: RenderOptions) -> None:
         raise ValueError("--canny-low must be less than or equal to --canny-high")
     if not 0 < options.color_frames_ratio < 1:
         raise ValueError("--color-frames-ratio must be greater than 0 and less than 1")
+    if options.loop < 0:
+        raise ValueError("--loop must be non-negative")
 
 
 def render_sketch_gif(
@@ -88,7 +91,7 @@ def render_sketch_gif(
         save_all=True,
         append_images=frames[1:],
         duration=options.duration,
-        loop=0,
+        loop=options.loop,
     )
 
     return RenderResult(

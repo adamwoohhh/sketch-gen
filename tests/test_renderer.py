@@ -43,6 +43,21 @@ def test_render_sketch_gif_creates_requested_frame_count(tmp_path):
     assert len(frames) == 8
 
 
+def test_render_sketch_gif_can_write_single_loop_metadata(tmp_path):
+    input_path = tmp_path / "input.png"
+    output_path = tmp_path / "output.gif"
+    _write_synthetic_image(input_path)
+
+    render_sketch_gif(
+        input_path,
+        output_path,
+        RenderOptions(frames=8, duration=40, loop=1),
+    )
+
+    with Image.open(output_path) as gif:
+        assert gif.info["loop"] == 1
+
+
 def test_order_edge_pixels_keeps_connected_strokes_together():
     edges = np.zeros((5, 8), dtype=np.uint8)
     edges[:, 1] = 255

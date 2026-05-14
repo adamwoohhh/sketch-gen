@@ -28,8 +28,12 @@ Useful options:
   --canny-low 80 \
   --canny-high 160 \
   --color-frames-ratio 0.65 \
+  --loop-once \
   --log
 ```
+
+`--loop-once` writes GIF loop metadata for a single loop. Without it, the GIF
+uses infinite looping.
 
 `--log` writes a log file under `./logs`. stdout remains JSON-only, so NodeJS
 callers can still parse the command result directly.

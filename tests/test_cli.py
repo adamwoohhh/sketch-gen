@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 
 def _write_synthetic_image(path: Path) -> None:
@@ -125,3 +126,30 @@ def test_cli_writes_log_file_when_log_enabled(tmp_path):
     assert log_path.parent == Path("logs")
     assert log_path.exists()
     assert "render complete" in log_path.read_text()
+
+
+def test_cli_loop_once_sets_gif_loop_metadata(tmp_path):
+    input_path = tmp_path / "input.png"
+    output_dir = tmp_path / "generated"
+    _write_synthetic_image(input_path)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "sketch_gen",
+            str(input_path),
+            str(output_dir),
+            "--frames",
+            "6",
+            "--loop-once",
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    with Image.open(payload["output_path"]) as gif:
+        assert gif.info["loop"] == 1
