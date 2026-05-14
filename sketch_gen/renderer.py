@@ -122,15 +122,8 @@ def _build_line_reveal_frames(edges: np.ndarray, frame_count: int) -> list[Image
     height, width = edges.shape
     # 根据边缘图的宽高创建一个白色的画布
     canvas = np.full((height, width, 3), 255, dtype=np.uint8)
-    # 取出所有边缘像素的行列索引
-    edge_rows, edge_cols = np.where(edges > 0)
-
-    # 按照从上到下、从左到右的顺序给所有像素点排序
-    # Reveal edge pixels from top to bottom. This deterministic ordering is less
-    # artistic than real stroke reconstruction, but it is stable and easy to test.
-    order = np.lexsort((edge_cols, edge_rows))
-    edge_rows = edge_rows[order]
-    edge_cols = edge_cols[order]
+    # 取出所有边缘像素的行列索引，并尽量按照“同一笔划连续绘制”的顺序排列。
+    edge_rows, edge_cols = _order_edge_pixels(edges)
 
     # 按照既定的帧数，将像素点按顺序填充到每一帧
     frames: list[Image.Image] = []
@@ -145,6 +138,99 @@ def _build_line_reveal_frames(edges: np.ndarray, frame_count: int) -> list[Image
         frames.append(Image.fromarray(frame, mode="RGB"))
 
     return frames
+
+
+def _order_edge_pixels(edges: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    # Canny 只告诉我们哪些像素是边缘，不知道真实的绘制顺序。这里先把互相
+    # 连接的边缘像素分成一组组“笔划”，避免以前按行扫描时多条线交错出现。
+    edge_mask = (edges > 0).astype(np.uint8)
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        edge_mask,
+        connectivity=8,
+    )
+
+    ordered_points: list[tuple[int, int]] = []
+    component_ids = range(1, component_count)
+
+    # 组件 0 是背景。真实笔划按包围盒左上角排序，保证每次运行结果稳定。
+    sorted_component_ids = sorted(
+        component_ids,
+        key=lambda label: (
+            stats[label, cv2.CC_STAT_TOP],
+            stats[label, cv2.CC_STAT_LEFT],
+        ),
+    )
+
+    for label in sorted_component_ids:
+        component_rows, component_cols = np.where(labels == label)
+        component_points = set(zip(component_rows.tolist(), component_cols.tolist()))
+        ordered_points.extend(_walk_connected_stroke(component_points))
+
+    if not ordered_points:
+        empty = np.array([], dtype=np.int64)
+        return empty, empty
+
+    rows, cols = zip(*ordered_points)
+    return np.array(rows, dtype=np.int64), np.array(cols, dtype=np.int64)
+
+
+def _walk_connected_stroke(
+    component_points: set[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    remaining = set(component_points)
+    ordered: list[tuple[int, int]] = []
+
+    while remaining:
+        current = _choose_stroke_start(remaining)
+
+        while current in remaining:
+            ordered.append(current)
+            remaining.remove(current)
+
+            neighbors = [
+                point
+                for point in _neighbor_points(current)
+                if point in remaining
+            ]
+            if not neighbors:
+                break
+
+            # 在同一连通笔划内部，优先走到相邻像素。遇到分叉时使用固定排序，
+            # 这样动画稳定可复现，而不是每次随机选择一个方向。
+            current = min(neighbors, key=lambda point: (point[0], point[1]))
+
+    return ordered
+
+
+def _choose_stroke_start(points: set[tuple[int, int]]) -> tuple[int, int]:
+    endpoints = [
+        point
+        for point in points
+        if _remaining_neighbor_count(point, points) <= 1
+    ]
+    candidates = endpoints or list(points)
+    return min(candidates, key=lambda point: (point[0], point[1]))
+
+
+def _remaining_neighbor_count(
+    point: tuple[int, int],
+    points: set[tuple[int, int]],
+) -> int:
+    return sum(neighbor in points for neighbor in _neighbor_points(point))
+
+
+def _neighbor_points(point: tuple[int, int]) -> list[tuple[int, int]]:
+    row, col = point
+    return [
+        (row - 1, col - 1),
+        (row - 1, col),
+        (row - 1, col + 1),
+        (row, col - 1),
+        (row, col + 1),
+        (row + 1, col - 1),
+        (row + 1, col),
+        (row + 1, col + 1),
+    ]
 
 
 def _build_color_fill_frames(
