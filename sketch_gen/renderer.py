@@ -288,13 +288,50 @@ def _build_color_fill_chunks(
         empty_mask = np.zeros_like(line_mask, dtype=bool)
         return [empty_mask.copy() for _ in range(frame_count)]
 
+    foreground_regions = [
+        region
+        for region, is_background in regions
+        if not is_background
+    ]
+    background_regions = [
+        region
+        for region, is_background in regions
+        if is_background
+    ]
+
+    background_mask = np.zeros_like(line_mask, dtype=bool)
+    for region in background_regions:
+        background_mask |= region
+
+    foreground_frame_count = frame_count - 1 if np.any(background_mask) else frame_count
+    if foreground_frame_count <= 0:
+        return [background_mask]
+
+    foreground_chunks = _build_region_chunks(
+        foreground_regions,
+        foreground_frame_count,
+        line_mask,
+    )
+    if np.any(background_mask):
+        return foreground_chunks + [background_mask]
+    return foreground_chunks
+
+
+def _build_region_chunks(
+    regions: list[np.ndarray],
+    frame_count: int,
+    template_mask: np.ndarray,
+) -> list[np.ndarray]:
+    if not regions:
+        return [np.zeros_like(template_mask, dtype=bool) for _ in range(frame_count)]
+
     # 先保证每个色块至少有机会单独出现；如果帧数更多，再把大色块拆成多笔。
     chunks: list[np.ndarray] = []
     extra_frames = max(0, frame_count - len(regions))
-    region_sizes = [int(np.count_nonzero(region)) for region, _is_background in regions]
+    region_sizes = [int(np.count_nonzero(region)) for region in regions]
     total_pixels = sum(region_sizes)
 
-    for index, (region, _is_background) in enumerate(regions):
+    for index, region in enumerate(regions):
         extra_for_region = 0
         if total_pixels > 0 and extra_frames > 0:
             if index == len(regions) - 1:
@@ -431,13 +468,8 @@ def _find_color_regions(
 
     remaining_mask = paintable_mask & ~processed_mask
     if np.any(remaining_mask):
-        regions.append(
-            (
-                remaining_mask,
-                True,
-                (0, 0),
-                int(np.count_nonzero(remaining_mask)),
-            )
+        regions.extend(
+            _build_regions_from_mask(remaining_mask, height, width, force_background=False)
         )
 
     # 非背景色块先填，接触图片边缘的背景区域最后填。面积大的区域排后一点，
@@ -450,6 +482,40 @@ def _find_color_regions(
         (points, is_background)
         for points, is_background, _top_left, _area in sorted_regions
     ]
+
+
+def _build_regions_from_mask(
+    mask: np.ndarray,
+    height: int,
+    width: int,
+    force_background: bool,
+) -> list[tuple[np.ndarray, bool, tuple[int, int], int]]:
+    regions: list[tuple[np.ndarray, bool, tuple[int, int], int]] = []
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8),
+        connectivity=8,
+    )
+
+    for label in range(1, component_count):
+        rows, cols = np.where(labels == label)
+        if len(rows) == 0:
+            continue
+
+        is_background = force_background or _touches_image_border(
+            rows,
+            cols,
+            height,
+            width,
+        )
+        region_mask = labels == label
+        top_left = (
+            stats[label, cv2.CC_STAT_TOP],
+            stats[label, cv2.CC_STAT_LEFT],
+        )
+        area = stats[label, cv2.CC_STAT_AREA]
+        regions.append((region_mask, is_background, top_left, area))
+
+    return regions
 
 
 def _touches_image_border(

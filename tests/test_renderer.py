@@ -94,16 +94,37 @@ def test_color_fill_frames_paint_connected_color_regions_before_background():
 
 
 def test_color_fill_chunks_spread_many_regions_across_frames():
-    source_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
-    for row in range(4):
-        for col in range(4):
-            source_rgb[row, col] = (row * 64, col * 64, 128)
-    line_mask = np.zeros((4, 4), dtype=bool)
+    source_rgb = np.full((6, 6, 3), (240, 220, 120), dtype=np.uint8)
+    for row in range(1, 5):
+        for col in range(1, 5):
+            source_rgb[row, col] = (row * 48, col * 48, 128)
+    line_mask = np.zeros((6, 6), dtype=bool)
+
+    chunks = _build_color_fill_chunks(source_rgb, line_mask, frame_count=5)
+    chunk_sizes = [int(np.count_nonzero(chunk)) for chunk in chunks]
+    background_mask = np.ones((6, 6), dtype=bool)
+    background_mask[1:5, 1:5] = False
+
+    assert len(chunks) == 5
+    assert sum(chunk_sizes[:-1]) == 16
+    assert max(chunk_sizes[:-1]) <= 6
+    assert min(chunk_sizes[:-1]) >= 2
+    assert np.array_equal(chunks[-1], background_mask)
+
+
+def test_color_fill_chunks_reserve_background_for_last_frame():
+    source_rgb = np.full((6, 6, 3), (240, 220, 120), dtype=np.uint8)
+    source_rgb[1:3, 1:3] = (220, 40, 40)
+    source_rgb[3:5, 3:5] = (40, 80, 220)
+    line_mask = np.zeros((6, 6), dtype=bool)
 
     chunks = _build_color_fill_chunks(source_rgb, line_mask, frame_count=4)
-    chunk_sizes = [int(np.count_nonzero(chunk)) for chunk in chunks]
+    background_mask = np.ones((6, 6), dtype=bool)
+    background_mask[1:3, 1:3] = False
+    background_mask[3:5, 3:5] = False
 
     assert len(chunks) == 4
-    assert sum(chunk_sizes) == 16
-    assert max(chunk_sizes) <= 6
-    assert min(chunk_sizes) >= 2
+    assert not np.any(chunks[0] & background_mask)
+    assert not np.any(chunks[1] & background_mask)
+    assert not np.any(chunks[2] & background_mask)
+    assert np.array_equal(chunks[-1], background_mask)
