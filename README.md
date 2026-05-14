@@ -11,13 +11,17 @@ make setup
 ## Usage
 
 ```bash
-make run INPUT=input.png OUTPUT=output.gif
+make run INPUT=input.png OUTPUT=output
 ```
+
+`OUTPUT` is an output directory, not the final GIF filename. The generated file
+is named `{original-file-name}-{timestamp}.gif`. If you do not pass an output
+directory, the CLI writes the GIF next to the input image.
 
 Useful options:
 
 ```bash
-.venv/bin/python -m sketch_gen input.png output.gif \
+.venv/bin/python -m sketch_gen input.png output \
   --frames 24 \
   --duration 80 \
   --blur-kernel 5 \

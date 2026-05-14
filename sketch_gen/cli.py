@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -15,7 +16,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Generate a progressive sketch-and-color GIF from an image.",
     )
     parser.add_argument("input_path", type=Path, help="Source image path.")
-    parser.add_argument("output_path", type=Path, help="Destination .gif path.")
+    parser.add_argument(
+        "output_dir",
+        nargs="?",
+        type=Path,
+        help="Destination directory. Defaults to the input image directory.",
+    )
     parser.add_argument("--frames", type=int, default=24, help="Total GIF frames.")
     parser.add_argument(
         "--duration",
@@ -64,7 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        result = render_sketch_gif(args.input_path, args.output_path, options)
+        output_path = build_output_path(args.input_path, args.output_dir)
+        result = render_sketch_gif(args.input_path, output_path, options)
     except ValueError as error:
         # Keep failures easy for NodeJS to consume: stdout stays empty, stderr
         # receives a human-readable message, and the exit code is non-zero.
@@ -85,3 +92,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
     return 0
+
+
+def build_output_path(input_path: Path, output_dir: Path | None) -> Path:
+    # The CLI accepts a directory instead of a final filename so callers do not
+    # need to invent unique GIF names. This also keeps the future NodeJS wrapper
+    # simple: pass an input path and optionally an output directory.
+    input_path = Path(input_path)
+    target_dir = Path(output_dir) if output_dir is not None else input_path.parent
+
+    # Use the original file stem plus a compact timestamp. Example:
+    # photo.png -> photo-20260514105523.gif
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    return target_dir / f"{input_path.stem}-{timestamp}.gif"
